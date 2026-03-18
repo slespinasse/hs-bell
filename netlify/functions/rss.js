@@ -1,15 +1,32 @@
 exports.handler = async function () {
   const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQGCxkWIkygiPEkJE0in6ExMQkwVilR4e2N9zpKnCsAhVhvPLR-DbiGsbb3_ddNPYqw5DHXoOgA24ht/pub?gid=0&single=true&output=csv";
   const TIME_ZONE = "America/New_York";
+  const FEED_URL = "https://hsbellrss.netlify.app/.netlify/functions/rss";
+  const SITE_URL = "https://hsbellrss.netlify.app/";
 
-  const response = await fetch(SHEET_URL);
+  const response = await fetch(SHEET_URL, {
+    headers: { "User-Agent": "Netlify RSS Feed" }
+  });
+
+  if (!response.ok) {
+    return {
+      statusCode: 500,
+      headers: {
+        "Content-Type": "application/rss+xml; charset=utf-8",
+        "Cache-Control": "no-cache"
+      },
+      body: buildErrorFeed(
+        FEED_URL,
+        SITE_URL,
+        `Feed source error: ${response.status}`
+      )
+    };
+  }
+
   const text = await response.text();
-
   const rows = parseCsv(text);
 
-  // Current time in Eastern Time
   const nowET = getNowInTimeZone(TIME_ZONE);
-
   let currentItem = "No active period";
 
   for (let i = 1; i < rows.length; i++) {
@@ -20,13 +37,12 @@ exports.handler = async function () {
     const startTime = (row[2] || "").trim();
     const endDate = (row[3] || "").trim();
     const endTime = (row[4] || "").trim();
-    const allDay = (row[5] || "").trim();
+    const allDay = (row[5] || "").trim().toLowerCase();
     const description = (row[6] || "").trim();
 
-    // Skip non-period rows
     if (!subject || !description) continue;
     if (!subject.toLowerCase().startsWith("period")) continue;
-    if (allDay.toLowerCase() === "true") continue;
+    if (allDay === "true") continue;
     if (!startDate || !startTime || !endDate || !endTime) continue;
 
     const start = buildLocalDateTime(startDate, startTime);
@@ -38,22 +54,25 @@ exports.handler = async function () {
     }
   }
 
-  const nowString = new Date().toUTCString();
+  const nowUtc = new Date().toUTCString();
+  const safeItem = escapeXml(currentItem);
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>Current Schedule</title>
-    <link>${SHEET_URL}</link>
-    <description>Live schedule</description>
+    <link>${escapeXml(SITE_URL)}</link>
+    <description>Live current bell schedule</description>
     <language>en-us</language>
-    <lastBuildDate>${nowString}</lastBuildDate>
+    <ttl>1</ttl>
+    <lastBuildDate>${escapeXml(nowUtc)}</lastBuildDate>
+    <atom:link href="${escapeXml(FEED_URL)}" rel="self" type="application/rss+xml" />
     <item>
-      <title><![CDATA[${currentItem}]]></title>
-      <description><![CDATA[${currentItem}]]></description>
-      <link>${SHEET_URL}</link>
+      <title>${safeItem}</title>
+      <description>${safeItem}</description>
+      <link>${escapeXml(SITE_URL)}</link>
       <guid isPermaLink="false">${Date.now()}</guid>
-      <pubDate>${nowString}</pubDate>
+      <pubDate>${escapeXml(nowUtc)}</pubDate>
     </item>
   </channel>
 </rss>`;
@@ -62,11 +81,38 @@ exports.handler = async function () {
     statusCode: 200,
     headers: {
       "Content-Type": "application/rss+xml; charset=utf-8",
-      "Cache-Control": "no-cache"
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
     },
     body: xml
   };
 };
+
+function buildErrorFeed(feedUrl, siteUrl, message) {
+  const nowUtc = new Date().toUTCString();
+  const safeMessage = escapeXml(message);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Current Schedule</title>
+    <link>${escapeXml(siteUrl)}</link>
+    <description>Live current bell schedule</description>
+    <language>en-us</language>
+    <ttl>1</ttl>
+    <lastBuildDate>${escapeXml(nowUtc)}</lastBuildDate>
+    <atom:link href="${escapeXml(feedUrl)}" rel="self" type="application/rss+xml" />
+    <item>
+      <title>${safeMessage}</title>
+      <description>${safeMessage}</description>
+      <link>${escapeXml(siteUrl)}</link>
+      <guid isPermaLink="false">${Date.now()}</guid>
+      <pubDate>${escapeXml(nowUtc)}</pubDate>
+    </item>
+  </channel>
+</rss>`;
+}
 
 function getNowInTimeZone(timeZone) {
   const now = new Date();
@@ -150,4 +196,13 @@ function parseCsv(csvText) {
   }
 
   return rows;
+}
+
+function escapeXml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
