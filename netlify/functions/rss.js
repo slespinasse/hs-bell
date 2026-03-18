@@ -1,28 +1,10 @@
 exports.handler = async function () {
   const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQGCxkWIkygiPEkJE0in6ExMQkwVilR4e2N9zpKnCsAhVhvPLR-DbiGsbb3_ddNPYqw5DHXoOgA24ht/pub?gid=0&single=true&output=csv";
   const TIME_ZONE = "America/New_York";
-  const FEED_URL = "https://hsbellrss.netlify.app/.netlify/functions/rss";
-  const SITE_URL = "https://hsbellrss.netlify.app/";
 
   const response = await fetch(SHEET_URL, {
     headers: { "User-Agent": "Netlify RSS Feed" }
   });
-
-  if (!response.ok) {
-    return {
-      statusCode: 500,
-      headers: {
-        "Content-Type": "application/rss+xml; charset=utf-8",
-        "Cache-Control": "no-cache"
-      },
-      body: buildErrorFeed(
-        FEED_URL,
-        SITE_URL,
-        `Feed source error: ${response.status}`
-      )
-    };
-  }
-
   const text = await response.text();
   const rows = parseCsv(text);
 
@@ -54,25 +36,31 @@ exports.handler = async function () {
     }
   }
 
-  const nowUtc = new Date().toUTCString();
+  const nowUtc = new Date();
+  const nowString = nowUtc.toUTCString();
+  const feedUrl = "https://hsbellrss.netlify.app/.netlify/functions/rss";
+  const guid = `hs-bell-${currentItem}-${nowUtc.getUTCFullYear()}-${nowUtc.getUTCMonth() + 1}-${nowUtc.getUTCDate()}-${nowUtc.getUTCHours()}-${nowUtc.getUTCMinutes()}`;
+
   const safeItem = escapeXml(currentItem);
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<rss version="2.0">
   <channel>
     <title>Current Schedule</title>
-    <link>${escapeXml(SITE_URL)}</link>
-    <description>Live current bell schedule</description>
+    <link>${feedUrl}</link>
+    <description>Live current bell schedule feed</description>
     <language>en-us</language>
+    <docs>https://www.rssboard.org/rss-specification</docs>
+    <lastBuildDate>${nowString}</lastBuildDate>
     <ttl>1</ttl>
-    <lastBuildDate>${escapeXml(nowUtc)}</lastBuildDate>
-    <atom:link href="${escapeXml(FEED_URL)}" rel="self" type="application/rss+xml" />
     <item>
       <title>${safeItem}</title>
       <description>${safeItem}</description>
-      <link>${escapeXml(SITE_URL)}</link>
-      <guid isPermaLink="false">${Date.now()}</guid>
-      <pubDate>${escapeXml(nowUtc)}</pubDate>
+      <summary>${safeItem}</summary>
+      <link>${feedUrl}</link>
+      <guid isPermaLink="false">${escapeXml(guid)}</guid>
+      <pubDate>${nowString}</pubDate>
+      <author>Paramus Public Schools</author>
     </item>
   </channel>
 </rss>`;
@@ -89,31 +77,6 @@ exports.handler = async function () {
   };
 };
 
-function buildErrorFeed(feedUrl, siteUrl, message) {
-  const nowUtc = new Date().toUTCString();
-  const safeMessage = escapeXml(message);
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
-  <channel>
-    <title>Current Schedule</title>
-    <link>${escapeXml(siteUrl)}</link>
-    <description>Live current bell schedule</description>
-    <language>en-us</language>
-    <ttl>1</ttl>
-    <lastBuildDate>${escapeXml(nowUtc)}</lastBuildDate>
-    <atom:link href="${escapeXml(feedUrl)}" rel="self" type="application/rss+xml" />
-    <item>
-      <title>${safeMessage}</title>
-      <description>${safeMessage}</description>
-      <link>${escapeXml(siteUrl)}</link>
-      <guid isPermaLink="false">${Date.now()}</guid>
-      <pubDate>${escapeXml(nowUtc)}</pubDate>
-    </item>
-  </channel>
-</rss>`;
-}
-
 function getNowInTimeZone(timeZone) {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -129,9 +92,7 @@ function getNowInTimeZone(timeZone) {
 
   const map = {};
   for (const part of parts) {
-    if (part.type !== "literal") {
-      map[part.type] = part.value;
-    }
+    if (part.type !== "literal") map[part.type] = part.value;
   }
 
   return new Date(
