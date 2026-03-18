@@ -42,6 +42,8 @@ exports.handler = async function () {
     <lastBuildDate>${nowString}</lastBuildDate>
     <item>
       <title>${currentItem}</title>
+      <description>${currentItem}</description>
+      <link>${SHEET_URL}</link>
       <guid isPermaLink="false">${Date.now()}</guid>
       <pubDate>${nowString}</pubDate>
     </item>
