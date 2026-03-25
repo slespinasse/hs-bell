@@ -13,10 +13,18 @@ exports.handler = async function () {
   const text = await response.text();
   const rows = parseCsv(text);
 
-  const nowET = getNowInTimeZone(TIME_ZONE);
+  const nowParts = getNowPartsInTimeZone(TIME_ZONE);
+  const nowKey = makeDateTimeKey(
+    nowParts.year,
+    nowParts.month,
+    nowParts.day,
+    nowParts.hour,
+    nowParts.minute,
+    nowParts.second
+  );
 
   let currentItem = "No active period";
-  let nextPeriodTime = null;
+  let nextPeriodKey = null;
   let currentPeriodNumber = null;
   let inPassingTime = false;
 
@@ -38,60 +46,69 @@ exports.handler = async function () {
     if (allDay === "true") continue;
     if (!startDate || !startTime || !endDate || !endTime) continue;
 
-    const start = buildLocalDateTime(startDate, startTime);
-    const end = buildLocalDateTime(endDate, endTime);
+    const startParts = parseSheetDateTime(startDate, startTime);
+    const endParts = parseSheetDateTime(endDate, endTime);
+
+    const startKey = makeDateTimeKey(
+      startParts.year,
+      startParts.month,
+      startParts.day,
+      startParts.hour,
+      startParts.minute,
+      startParts.second
+    );
+
+    const endKey = makeDateTimeKey(
+      endParts.year,
+      endParts.month,
+      endParts.day,
+      endParts.hour,
+      endParts.minute,
+      endParts.second
+    );
 
     periodsToday.push({
       subject,
       description,
-      start,
-      end
+      startKey,
+      endKey,
+      startParts,
+      endParts
     });
   }
 
-  periodsToday.sort((a, b) => a.start - b.start);
+  periodsToday.sort((a, b) => a.startKey - b.startKey);
 
   for (let i = 0; i < periodsToday.length; i++) {
     const p = periodsToday[i];
     const periodMatch = p.subject.match(/\d+/);
     const periodNum = periodMatch ? periodMatch[0] : null;
 
-    if (nowET >= p.start && nowET <= p.end) {
+    if (nowKey >= p.startKey && nowKey <= p.endKey) {
       currentItem = `${p.description}, ${p.subject}`;
-      nextPeriodTime = p.end;
+      nextPeriodKey = p.endKey;
       currentPeriodNumber = periodNum;
       break;
     }
 
     if (i < periodsToday.length - 1) {
       const nextP = periodsToday[i + 1];
-      if (nowET > p.end && nowET < nextP.start) {
+      if (nowKey > p.endKey && nowKey < nextP.startKey) {
         inPassingTime = true;
         currentItem = `${p.description}, Passing Time`;
-        nextPeriodTime = nextP.start;
+        nextPeriodKey = nextP.startKey;
         currentPeriodNumber = periodNum;
         break;
       }
     }
 
-    if (nowET < p.start && !nextPeriodTime) {
+    if (nowKey < p.startKey && !nextPeriodKey) {
       currentItem = `${p.description}, Before ${p.subject}`;
-      nextPeriodTime = p.start;
+      nextPeriodKey = p.startKey;
       currentPeriodNumber = periodNum;
       break;
     }
   }
-
-  const nextTimeParts = nextPeriodTime
-    ? {
-        year: nextPeriodTime.getFullYear(),
-        month: nextPeriodTime.getMonth(),
-        day: nextPeriodTime.getDate(),
-        hour: nextPeriodTime.getHours(),
-        minute: nextPeriodTime.getMinutes(),
-        second: nextPeriodTime.getSeconds()
-      }
-    : null;
 
   const html = `<!DOCTYPE html>
 <html>
@@ -112,12 +129,12 @@ exports.handler = async function () {
     width: 100%;
     font-family: Arial, sans-serif;
     color: white;
-    padding: 2px 12px;
-    font-size: 1.1vw;
+    padding: 4px 16px;
+    font-size: 1.4vw;
     font-weight: bold;
+    line-height: 1.2;
     white-space: nowrap;
     box-sizing: border-box;
-    line-height: 1.2;
   }
 </style>
 </head>
@@ -127,7 +144,7 @@ exports.handler = async function () {
 
 <script>
 const currentItem = "${escapeJs(currentItem)}";
-const nextTimeParts = ${JSON.stringify(nextTimeParts)};
+const nextPeriodKey = ${nextPeriodKey ? String(nextPeriodKey) : "null"};
 const currentPeriodNumber = "${escapeJs(currentPeriodNumber || "")}";
 const inPassingTime = ${inPassingTime};
 
@@ -156,18 +173,6 @@ function getBarColor(period, passing) {
   return colors[period] || "rgba(0,0,0,0.8)";
 }
 
-function buildNextTime() {
-  if (!nextTimeParts) return null;
-  return new Date(
-    nextTimeParts.year,
-    nextTimeParts.month,
-    nextTimeParts.day,
-    nextTimeParts.hour,
-    nextTimeParts.minute,
-    nextTimeParts.second
-  );
-}
-
 function updateBar() {
   const now = new Date();
 
@@ -184,10 +189,9 @@ function updateBar() {
   });
 
   let countdownText = "";
-  const nextTime = buildNextTime();
 
-  if (nextTime) {
-    const diff = nextTime - now;
+  if (nextPeriodKey) {
+    const diff = nextPeriodKey - Date.now();
     countdownText = " | Next in " + formatCountdown(diff);
   }
 
@@ -206,7 +210,7 @@ setInterval(updateBar, 1000);
   return htmlResponse(html, true);
 };
 
-function getNowInTimeZone(timeZone) {
+function getNowPartsInTimeZone(timeZone) {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -224,28 +228,32 @@ function getNowInTimeZone(timeZone) {
     if (part.type !== "literal") map[part.type] = part.value;
   }
 
-  return new Date(
-    Number(map.year),
-    Number(map.month) - 1,
-    Number(map.day),
-    Number(map.hour),
-    Number(map.minute),
-    Number(map.second)
-  );
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second)
+  };
 }
 
-function buildLocalDateTime(dateStr, timeStr) {
+function parseSheetDateTime(dateStr, timeStr) {
   const dateOnly = dateStr.split(" ")[0];
   const [year, month, day] = dateOnly.split("-").map(Number);
-  const [hour, minute, second = "00"] = timeStr.split(":");
+  const [hour, minute, second = "00"] = timeStr.split(":").map(Number);
 
-  return new Date(
-    year,
-    month - 1,
-    day,
-    Number(hour),
-    Number(minute),
-    Number(second)
+  return { year, month, day, hour, minute, second };
+}
+
+function makeDateTimeKey(year, month, day, hour, minute, second) {
+  return Number(
+    String(year).padStart(4, "0") +
+    String(month).padStart(2, "0") +
+    String(day).padStart(2, "0") +
+    String(hour).padStart(2, "0") +
+    String(minute).padStart(2, "0") +
+    String(second).padStart(2, "0")
   );
 }
 
